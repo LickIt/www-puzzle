@@ -142,9 +142,14 @@
 
         // Attach all event handlers
 		Puzzle.prototype.initEvents = function () {
+		    this.isTouch = 'ontouchstart' in window;
+		    this.canvasPresent.addEventListener("touchstart", this.onMouseDown.bind(this));
+		    window.addEventListener("touchend", this.onMouseUp.bind(this));
+		    this.canvasPresent.addEventListener("touchmove", this.onMouseMove.bind(this));
 		    this.canvasPresent.addEventListener("mousedown", this.onMouseDown.bind(this));
 		    window.addEventListener("mouseup", this.onMouseUp.bind(this));
 		    this.canvasPresent.addEventListener("mousemove", this.onMouseMove.bind(this));
+		    this.canvasPresent.addEventListener("click", this.onMouseClick.bind(this));
 		    this.canvasPresent.addEventListener("dblclick", this.onMouseDblClick.bind(this));
 		};
 
@@ -190,13 +195,15 @@
 
         // Mousedown event handler
 		Puzzle.prototype.onMouseDown = function (e) {
-		    var clickX = e.clientX - this.canvasPresent.offsetLeft;
-		    var clickY = e.clientY - this.canvasPresent.offsetTop;
+		    var point = (e.changedTouches ? e.changedTouches[0] : e);
+		    var clickX = point.clientX - this.canvasPresent.offsetLeft;
+		    var clickY = point.clientY - this.canvasPresent.offsetTop;
 		    var piece = this.getPieceAt(clickX, clickY);
 
 		    if (piece) {
 		        this.isDragging = true;
 		        this.lastDragPoint = { x: clickX, y: clickY };
+		        this.lastDragPiece = this.dragPiece;
 		        this.dragPiece = piece;
 		        this.dragSet = this.getSnapSet(piece.num);
 		        this.render();
@@ -219,9 +226,10 @@
 
         // Mousemove event handler
 		Puzzle.prototype.onMouseMove = function (e) {
+		    var point = (e.changedTouches ? e.changedTouches[0] : e);
 		    if (this.isDragging) {
-		        var mouseX = e.clientX - this.canvasPresent.offsetLeft;
-		        var mouseY = e.clientY - this.canvasPresent.offsetTop;
+		        var mouseX = point.clientX - this.canvasPresent.offsetLeft;
+		        var mouseY = point.clientY - this.canvasPresent.offsetTop;
 
 		        var deltaX = mouseX - this.lastDragPoint.x;
 		        var deltaY = mouseY - this.lastDragPoint.y;
@@ -231,6 +239,19 @@
 		    }
 		};
 
+        // mouseclick event handler
+		Puzzle.prototype.onMouseClick = function (e) {
+		    if (this.isTouch && !this.isDragging && this.dragPiece == this.lastDragPiece) {
+		        var point = (e.changedTouches ? e.changedTouches[0] : e);
+		        var now = new Date().getTime();
+		        var delta = now - this.lastMouseClick;
+		        this.lastMouseClick = now;
+		        if (delta > 20 && delta < 400) {
+		            this.onMouseDblClick(point);
+		        }
+		    }
+		};
+        
         // Mousedblclick event handler
 		Puzzle.prototype.onMouseDblClick = function (e) {
 		    var clickX = e.clientX - this.canvasPresent.offsetLeft;
