@@ -1,0 +1,638 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <title>Puzzle</title>
+    <meta charset="utf-8" />
+	<style>
+		html, body {
+			width: 100%;
+			height: 100%;
+			margin: 0;
+		}
+		input {
+			box-sizing: border-box;
+			height: 24px;
+			margin-left: 10px;
+		}
+		canvas {
+			height: calc(100% - 52px);
+			width: 100%;
+		}
+	</style>
+</head>
+<body>
+	<span>Puzzle Size:</span><input type="number" min="3" max="30" value="4" id="puzzle-size" /><div></div>
+	<span>Image:</span><input type="file" id="file-select" />
+    <canvas id="canvas">Your browser does not support the canvas element!</canvas>
+	<script>
+	</script>
+    <script>
+        // Puzzle object
+		function Puzzle (canvas) {
+		    // consts
+		    RAD = Math.PI / 180.0;
+		    PIECE_SIZE = 300;
+
+            // fields
+		    this.canvasPresent = canvas;
+		    this.canvasDrawing = document.createElement("canvas");
+		    this.image = null;
+			this.size = null;
+			this.width = parseInt(window.getComputedStyle(canvas).width);
+			this.height = parseInt(window.getComputedStyle(canvas).height);
+			this.scale = null;
+			this.imageScale = null;
+			this.contextDrawing = null;
+			this.contextPresent = null;
+			this.pieces = null;
+			this.isDragging = false;
+			this.lastDragPoint = null;
+			this.dragPiece = null;
+			this.dragSet = null;
+			this.snaps = null;
+			this.pieceCanvases = null;
+
+			this.load();
+			this.initEvents();
+		}
+
+        // Initialize puzzle object
+		Puzzle.prototype.init = function (size, image, loaded) {
+		    this.image = image;
+		    this.size = size;
+		    this.scale = Math.min(this.width, this.height) / (this.size * PIECE_SIZE * 1.5);
+		    this.imageScale = (this.size * PIECE_SIZE) / Math.min(image.width, image.height);
+
+		    // set proper size
+		    this.canvasPresent.width = this.width;
+		    this.canvasPresent.height = this.height;
+		    this.canvasDrawing.width = this.width;
+		    this.canvasDrawing.height = this.height;
+
+		    // get drawing context
+		    this.contextDrawing = this.canvasDrawing.getContext("2d");
+		    this.contextPresent = this.canvasPresent.getContext("2d");
+
+		    if (!loaded) {
+		        this.initPieces();
+		    }
+
+		    this.initPieceCanvases();
+
+		    if (!this.save(true)) {
+		        alert("Playing without save!\r\nPlease choose smaller image and/or size if you want to be able to resume!");
+		    }
+
+		    this.render();
+		};
+		
+        // Generate and randomize pieces
+		Puzzle.prototype.initPieces = function () {
+		    // make 2D array for pieces
+		    this.pieces = new Array(this.size);
+		    for (var i = 0; i < this.size; i++) {
+		        this.pieces[i] = new Array(this.size);
+		    }
+
+		    // make 2D array for snaps
+		    this.snaps = new Array(this.size * this.size);
+		    for (var i = 0; i < this.size * this.size; i++) {
+		        this.snaps[i] = [ i ];
+		    }
+		    
+		    // init to random positions
+		    var minXPosition = PIECE_SIZE / 3;
+		    var maxXPosition = this.width / this.scale - PIECE_SIZE - PIECE_SIZE / 3;
+		    var minYPosition = PIECE_SIZE / 3;
+		    var maxYPosition = this.height / this.scale - PIECE_SIZE - PIECE_SIZE / 3;
+
+		    for (var y = 0; y < this.size; y++) {
+		        for (var x = 0; x < this.size; x++) {
+		            this.pieces[y][x] = {
+		                r: this.getRandomIndent(),
+		                b: this.getRandomIndent(),
+		                t: 0,
+		                l: 0,
+		                x: this.getRandomInt(minXPosition, maxXPosition),
+		                y: this.getRandomInt(minYPosition, maxYPosition),
+                        num: y * this.size + x
+		            };
+
+		            if (y == 0) {
+		                this.pieces[y][x].t = 0;
+		            }
+		            else {
+		                this.pieces[y][x].t = this.pieces[y - 1][x].b * -1;
+		            }
+		            if (x == 0) {
+		                this.pieces[y][x].l = 0;
+		            }
+		            else {
+		                this.pieces[y][x].l = this.pieces[y][x - 1].r * -1;
+		            }
+		            if (y == this.size - 1) {
+		                this.pieces[y][x].b = 0;
+		            }
+		            if (x == this.size - 1) {
+		                this.pieces[y][x].r = 0;
+		            }
+		        }
+		    }
+		};
+
+        // Attach all event handlers
+		Puzzle.prototype.initEvents = function () {
+		    this.canvasPresent.addEventListener("mousedown", this.onMouseDown.bind(this));
+		    window.addEventListener("mouseup", this.onMouseUp.bind(this));
+		    this.canvasPresent.addEventListener("mousemove", this.onMouseMove.bind(this));
+		    this.canvasPresent.addEventListener("dblclick", this.onMouseDblClick.bind(this));
+		};
+
+        // Init piece canvases for performance
+		Puzzle.prototype.initPieceCanvases = function () {
+		    this.pieceCanvases = new Array(this.size * this.size);
+		    for (var y = 0; y < this.size; y++) {
+		        for (var x = 0; x < this.size; x++) {
+		            var canvas = this.DrawPieceToCanvas(this.pieces[y][x]);
+		            this.pieceCanvases[this.pieces[y][x].num] = canvas;
+		        }
+		    }
+		};
+
+        // Get the pice that contains the point (X, Y)
+		Puzzle.prototype.getPieceAt = function (x, y) {
+		    var ctx = this.contextDrawing;
+		    ctx.save();
+		    ctx.scale(this.scale, this.scale);
+
+            // reverse order to get the one with top z-index
+		    for (var j = this.size - 1; j >= 0; j--) {
+		        for (var i = this.size - 1; i >= 0; i--) {
+		            ctx.save();
+		            ctx.beginPath();
+
+		            var p = this.pieces[j][i];
+		            this.DrawPiece(this.contextDrawing, p, p.x, p.y);
+
+		            if (ctx.isPointInPath(x, y)) {
+		                ctx.restore();
+		                ctx.restore();
+		                return this.pieces[j][i];
+		            }
+		            
+		            ctx.restore();
+		        }
+		    }
+
+		    ctx.restore();
+		    return null;
+		};
+
+        // Mousedown event handler
+		Puzzle.prototype.onMouseDown = function (e) {
+		    var clickX = e.clientX - this.canvasPresent.offsetLeft;
+		    var clickY = e.clientY - this.canvasPresent.offsetTop;
+		    var piece = this.getPieceAt(clickX, clickY);
+
+		    if (piece) {
+		        this.isDragging = true;
+		        this.lastDragPoint = { x: clickX, y: clickY };
+		        this.dragPiece = piece;
+		        this.dragSet = this.getSnapSet(piece.num);
+		        this.render();
+		    };
+
+		    return true;
+		};
+
+        // Mouseup event handler
+		Puzzle.prototype.onMouseUp = function (e) {
+		    if (this.isDragging) {
+		        this.isDragging = false;
+		        setTimeout(function () {
+		            this.snapPiece();
+		            this.save(false);
+		            this.render();
+		        }.bind(this), 0);
+		    }
+		};
+
+        // Mousemove event handler
+		Puzzle.prototype.onMouseMove = function (e) {
+		    if (this.isDragging) {
+		        var mouseX = e.clientX - this.canvasPresent.offsetLeft;
+		        var mouseY = e.clientY - this.canvasPresent.offsetTop;
+
+		        var deltaX = mouseX - this.lastDragPoint.x;
+		        var deltaY = mouseY - this.lastDragPoint.y;
+
+		        this.moveSnappedPieces(this.snaps[this.dragSet], deltaX / this.scale, deltaY / this.scale);
+		        this.lastDragPoint = { x: mouseX, y: mouseY };
+		    }
+		};
+
+        // Mousedblclick event handler
+		Puzzle.prototype.onMouseDblClick = function (e) {
+		    var clickX = e.clientX - this.canvasPresent.offsetLeft;
+		    var clickY = e.clientY - this.canvasPresent.offsetTop;
+            
+            // unsnap piece
+		    setTimeout(function () {
+		        var piece = this.getPieceAt(clickX, clickY);
+		        if (piece) {
+		            var set = this.getSnapSet(piece.num);
+		            if (this.snaps[set].length > 1) {
+		                piece.x += PIECE_SIZE / 3;
+		                piece.y += PIECE_SIZE / 3;
+		                this.snaps[set].splice(this.snaps[set].indexOf(piece.num), 1);
+		                this.snaps.push([piece.num]);
+		                this.save(false);
+		                this.render();
+		            }
+		        }
+		    }.bind(this), 0);
+		};
+
+        // Get the snap set that a piece belong to
+		Puzzle.prototype.getSnapSet = function (pieceNum) {
+		    for (var i = 0; i < this.snaps.length; i++) {
+		        if (this.snaps[i].indexOf(pieceNum) >= 0) {
+		            return i;
+		        }
+		    }
+		};
+
+        // Snap the dropped piece to any nearby piece
+		Puzzle.prototype.snapPiece = function () {
+		    var dragSet = this.snaps[this.dragSet];
+		    dragSet.splice(dragSet.indexOf(this.dragPiece.num), 1);
+		    dragSet.push(this.dragPiece.num);
+		    for (var i = dragSet.length - 1; i >= 0; i--) {
+		        var thisPiece = this.pieces[Math.floor(dragSet[i] / this.size)][dragSet[i] % this.size];
+		        var centerX = thisPiece.x + PIECE_SIZE / 2;
+		        var centerY = thisPiece.y + PIECE_SIZE / 2;
+		        for (var y = 0; y < this.size; y++) {
+		            for (var x = 0; x < this.size; x++) {
+		                var otherPiece = this.pieces[y][x];
+		                if (otherPiece != this && dragSet.indexOf(otherPiece.num) < 0) {
+		                    var otherCenterX = otherPiece.x + PIECE_SIZE / 2;
+		                    var otherCenterY = otherPiece.y + PIECE_SIZE / 2;
+		                    var deltaX = Math.abs(centerX - otherCenterX);
+		                    var deltaY = Math.abs(centerY - otherCenterY);
+
+		                    // rough match
+		                    var flag = false;
+		                    var EPS = PIECE_SIZE / 4;
+		                    var moveX, moveY;
+		                    if (deltaX * deltaX + deltaY * deltaY < PIECE_SIZE * PIECE_SIZE * 1.5 &&
+                                deltaX * deltaX + deltaY * deltaY > PIECE_SIZE * PIECE_SIZE / 1.5) {
+		                        // left
+		                        if (centerX < otherCenterX && Math.abs(centerY - otherCenterY) < EPS) {
+		                            if (thisPiece.r != 0 && thisPiece.r + otherPiece.l == 0) {
+		                                flag = true;
+		                                moveX = otherPiece.x - PIECE_SIZE - thisPiece.x;
+		                                moveY = otherPiece.y - thisPiece.y;
+		                            }
+		                        }
+		                            // right
+		                        else if (centerX > otherCenterX && Math.abs(centerY - otherCenterY) < EPS) {
+		                            if (thisPiece.l != 0 && thisPiece.l + otherPiece.r == 0) {
+		                                flag = true;
+		                                moveX = otherPiece.x + PIECE_SIZE - thisPiece.x;
+		                                moveY = otherPiece.y - thisPiece.y;
+		                            }
+		                        }
+		                            // top
+		                        else if (centerY < otherCenterY && Math.abs(centerX - otherCenterX) < EPS) {
+		                            if (thisPiece.b != 0 && thisPiece.b + otherPiece.t == 0) {
+		                                flag = true;
+		                                moveX = otherPiece.x - thisPiece.x;
+		                                moveY = otherPiece.y - PIECE_SIZE - thisPiece.y;
+		                            }
+		                        }
+		                            // bottom
+		                        else if (centerY > otherCenterY && Math.abs(centerX - otherCenterX) < EPS) {
+		                            if (thisPiece.t != 0 && thisPiece.t + otherPiece.b == 0) {
+		                                flag = true;
+		                                moveX = otherPiece.x - thisPiece.x;
+		                                moveY = otherPiece.y + PIECE_SIZE - thisPiece.y;
+		                            }
+		                        }
+		                    }
+
+		                    if (flag) {
+		                        // find snap set in which drag point resides
+		                        var firstSet = this.getSnapSet(thisPiece.num);
+		                        var secondSet = this.getSnapSet(otherPiece.num);
+
+		                        this.moveSnappedPieces(this.snaps[firstSet], moveX, moveY);
+		                        this.snaps[firstSet] = this.snaps[firstSet].concat(this.snaps[secondSet]);
+		                        this.snaps.splice(secondSet, 1);
+
+		                        return;
+		                    }
+		                }
+		            }
+		        }
+		    };
+		};
+
+        // Move a set of points to a new position
+		Puzzle.prototype.moveSnappedPieces = function (set, deltaX, deltaY) {
+		    set.forEach(function (e) {
+		        var piece = this.pieces[Math.floor(e / this.size)][e % this.size];
+		        piece.x += deltaX;
+		        piece.y += deltaY;
+		    }, this);
+		};
+
+        // Get random indentation, either -1 or +1
+		Puzzle.prototype.getRandomIndent = function () {
+		    if (Math.random() < 0.5)
+		        return -1;
+
+		    return 1;
+		};
+
+        // Get random integer between min and max
+		Puzzle.prototype.getRandomInt = function (min, max) {
+		    return Math.floor(Math.random() * (max - min)) + min;
+		};
+
+		// Reflect point X over center C
+		Puzzle.prototype.ReflectPointY = function (y, cy) {
+		    return 2 * cy - y;
+		};
+
+		// Reflect only x part of point X over center C
+		Puzzle.prototype.ReflectPointX = function (x, cx) {
+		    return 2 * cx - x;
+		}
+
+        // Draws the arc in the pieces
+		Puzzle.prototype.DrawArc = function (ctx, startPoint) {
+		    var points = new Array(5);
+		    var controlPoints = new Array(8);
+		    var sp = startPoint;
+
+		    // curve points
+		    points[0] = startPoint;
+		    points[1] = {
+		        x: sp.x + 10,
+		        y: sp.y - 40
+		    };
+		    points[2] = {
+		        x: sp.x + 50,
+		        y: sp.y - 100
+		    };
+		    points[3] = {
+		        x: sp.x + 90,
+		        y: sp.y - 40
+		    };
+		    points[4] = {
+		        x: sp.x + 100,
+		        y: sp.y
+		    };
+
+		    // control points
+		    controlPoints[0] = {
+                x: points[0].x + 25,
+                y: points[0].y
+		    };
+		    controlPoints[1] = {
+		        x: points[0].x + 30,
+		        y: points[1].y + 10
+		    };
+            controlPoints[2] = {
+                x: this.ReflectPointX(controlPoints[1].x, points[1].x),
+                y: this.ReflectPointY(controlPoints[1].y, points[1].y)
+		    };
+            controlPoints[3] = {
+                x: points[2].x - 45,
+                y: points[2].y
+		    };
+            controlPoints[4] = {
+                x: this.ReflectPointX(controlPoints[3].x, points[2].x),
+                y: controlPoints[3].y
+		    };
+            controlPoints[5] = {
+                x: this.ReflectPointX(controlPoints[2].x, points[2].x),
+                y: controlPoints[2].y
+		    };
+            controlPoints[6] = {
+                x: this.ReflectPointX(controlPoints[1].x, points[2].x),
+                y: controlPoints[1].y
+		    };
+            controlPoints[7] = {
+                x: this.ReflectPointX(controlPoints[0].x, points[2].x),
+                y: controlPoints[0].y
+		    };
+
+		    // draw
+		    ctx.moveTo(points[0].x, points[0].y);
+		    ctx.bezierCurveTo(controlPoints[0].x, controlPoints[0].y, controlPoints[1].x, controlPoints[1].y, points[1].x, points[1].y);
+		    ctx.bezierCurveTo(controlPoints[2].x, controlPoints[2].y, controlPoints[3].x, controlPoints[3].y, points[2].x, points[2].y);
+		    ctx.bezierCurveTo(controlPoints[4].x, controlPoints[4].y, controlPoints[5].x, controlPoints[5].y, points[3].x, points[3].y);
+		    ctx.bezierCurveTo(controlPoints[6].x, controlPoints[6].y, controlPoints[7].x, controlPoints[7].y, points[4].x, points[4].y);
+		};
+
+        // Draws the side of a piece
+		Puzzle.prototype.DrawSide = function (ctx, startPoint, angle, indent) {
+		    var sp = startPoint;
+
+		    ctx.save();
+
+		    // apply transformations
+		    ctx.translate(sp.x, sp.y);
+		    ctx.rotate(angle * RAD);
+		    if (indent < 0) {
+		        ctx.scale(1, -1);
+		    }
+		    ctx.translate(-sp.x, -sp.y);
+
+		    // draw side lines
+		    ctx.moveTo(sp.x, sp.y)
+		    ctx.lineTo(sp.x + 100, sp.y);
+
+		    // draw arc
+		    if (indent != 0) {
+		        var newSp = { x: sp.x + 100, y: sp.y };
+		        this.DrawArc(ctx, newSp);
+		    }
+		    else {
+		        ctx.lineTo(sp.x + 200, sp.y);
+		    }
+
+		    ctx.lineTo(sp.x + 300, sp.y);
+		    if (indent < 0) {
+		        ctx.lineTo(sp.x + 150, sp.y - 150);
+		    }
+		    else {
+		        ctx.lineTo(sp.x + 150, sp.y + 150);
+		    }
+		    ctx.lineTo(sp.x, sp.y);
+
+		    ctx.restore();
+		};
+
+        // Draw a whole piece
+		Puzzle.prototype.DrawPiece = function (ctx, piece, x, y) {
+		    var sp = { x: x, y: y };
+		    this.DrawSide(ctx, sp, 0, piece.t);
+		    sp.x += PIECE_SIZE;
+		    this.DrawSide(ctx, sp, 90, piece.r);
+		    sp.y += PIECE_SIZE;
+		    this.DrawSide(ctx, sp, 180, piece.b);
+		    sp.x -= PIECE_SIZE;
+		    this.DrawSide(ctx, sp, 270, piece.l);
+		};
+
+        // Draw a piece to a canvas for optimization
+		Puzzle.prototype.DrawPieceToCanvas = function (piece) {
+		    var y = Math.floor(piece.num / this.size);
+		    var x = piece.num % this.size;
+
+		    var canvas = document.createElement("canvas");
+		    canvas.width = (5 * PIECE_SIZE * this.scale) / 3;
+		    canvas.height = (5 * PIECE_SIZE * this.scale) / 3;
+
+		    var ctx = canvas.getContext("2d");
+		    ctx.save();
+		    ctx.scale(this.scale, this.scale);
+		    ctx.lineWidth = 5;
+		    ctx.beginPath();
+		    this.DrawPiece(ctx, piece, PIECE_SIZE / 3, PIECE_SIZE / 3);
+		    ctx.stroke();
+		    ctx.clip();
+
+		    var sx = (x * PIECE_SIZE - PIECE_SIZE / 3) / this.imageScale;
+		    var sy = (y * PIECE_SIZE - PIECE_SIZE / 3) / this.imageScale;
+		    var sw = canvas.width / (this.imageScale * this.scale);
+		    var sh = canvas.height / (this.imageScale * this.scale);
+		    var dx = 0;
+		    var dy = 0;
+		    var dw = canvas.width / this.scale;
+		    var dh = canvas.height / this.scale;
+
+		    if (x == 0) {
+		        sx = 0;
+		        sw -= sw / 5;
+		        dx = dw / 5;
+		        dw -= dw / 5;
+		    }
+		    else if (x == this.size - 1) {
+		        sw -= sw / 5;
+		        dw -= dw / 5;
+		    }
+		    if (y == 0) {
+		        sy = 0;
+		        sh -= sh / 5;
+		        dy = dh / 5;
+		        dh -= dh / 5;
+		    }
+		    else if (y == this.size - 1) {
+		        sh -= sh / 5;
+		        dh -= dh / 5;
+		    }
+
+		    ctx.drawImage(this.image, sx, sy, sw, sh, dx, dy, dw, dh);
+		    ctx.restore();
+
+		    return canvas;
+		};
+
+        // Render function
+		Puzzle.prototype.render = function (timestamp) {
+		    var ctx = this.contextDrawing;
+		    ctx.fillStyle = "white";
+		    ctx.fillRect(0, 0, this.width, this.height);
+
+		    ctx.save();
+		    //ctx.scale(this.scale, this.scale);
+		    //ctx.lineWidth = 5;
+		    for (var y = 0; y < this.size; y++) {
+		        for (var x = 0; x < this.size; x++) {
+		            var p = this.pieces[y][x];
+		            var canvas = this.pieceCanvases[p.num];
+		            ctx.drawImage(canvas, p.x * this.scale - canvas.width / 5, p.y * this.scale - canvas.width / 5, canvas.width, canvas.height);
+		        }
+		    }
+
+		    ctx.restore();
+		    this.contextPresent.drawImage(this.canvasDrawing, 0, 0);
+		    if (this.isDragging) {
+		        requestAnimationFrame(this.render.bind(this));
+		    }
+		};
+
+        // Save state to localstorage
+		Puzzle.prototype.save = function (saveImage) {
+			if (!localStorage)
+				return false;
+				
+		    localStorage.setItem("pieces", JSON.stringify(this.pieces));
+		    localStorage.setItem("snaps", JSON.stringify(this.snaps));
+		    localStorage.setItem("size", this.size);
+		    if (saveImage) {
+		        try {
+		            localStorage.setItem("image", this.image.src);
+		        }
+		        catch (e) {
+		            return false;
+		        }
+		    }
+
+		    return true;
+		};
+
+        // Load saved state from local storage
+		Puzzle.prototype.load = function () {
+			if (!localStorage)
+				return false;
+		    
+			var piecesJSON = localStorage.getItem("pieces");
+		    var imgurl = localStorage.getItem("image");
+		    var size = localStorage.getItem("size");
+		    var snapsJSON = localStorage.getItem("snaps");
+
+		    if (piecesJSON && imgurl && size && snapsJSON) {
+		        this.pieces = JSON.parse(piecesJSON);
+		        this.snaps = JSON.parse(snapsJSON);
+		        this.image = new Image();
+		        var self = this;
+		        this.image.onload = function () {
+		            self.init(parseInt(size), self.image, true);
+		        };
+		        this.image.src = imgurl;
+		        return true;
+		    }
+
+		    return false;
+		};
+		
+		var img;
+		function handleImage(e){
+			// check extension
+			if (!/image.*/i.test(e.target.files[0].type)) {
+				alert("Please select an image!");
+				return false;
+			}
+
+			var reader = new FileReader();
+			reader.onload = function(event){
+				img = new Image();
+				img.onload = function(){
+				    var size = parseInt(document.getElementById("puzzle-size").value);
+				    var canvas = document.getElementById("canvas");
+				    puzzle.init(size, img, false);
+				}
+				img.src = event.target.result;
+			}
+			reader.readAsDataURL(e.target.files[0]);     
+		}
+		
+		document.getElementById('file-select').addEventListener('change', handleImage, false);
+		var puzzle = new Puzzle(document.getElementById("canvas"));
+    </script>
+</body>
+</html>
